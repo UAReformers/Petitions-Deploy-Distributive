@@ -1,0 +1,11 @@
+name = Petitions Signature Form
+description = Provides a form for signing petitions.
+core = 7.x
+dependencies[] = libraries (>=2.x)
+package = Petitions
+configure = admin/config/services/petitionssignatureform
+
+; Information added by drush on 2014-11-06
+version = "3d3e3bcf2d588b0e9747ef5df5e788770cd2d0ee"
+project = "petitionssignatureform"
+datestamp = "1415277878"

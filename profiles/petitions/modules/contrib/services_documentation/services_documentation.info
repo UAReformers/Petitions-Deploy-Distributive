@@ -1,0 +1,9 @@
+name = Services Documentation
+description = Provides documentation pages for Services resources.
+core = 7.x
+package = services
+dependencies[] = services
+; Information added by drush on 2014-10-07
+version = "e3accca7f2c"
+project = "services_documentation"
+datestamp = "1412711620"

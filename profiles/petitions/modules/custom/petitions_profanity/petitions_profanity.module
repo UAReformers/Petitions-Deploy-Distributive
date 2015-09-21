@@ -1,0 +1,61 @@
+<?php
+/**
+ * @file
+ * Module file for petitions_profanity.
+ */
+
+/**
+ * Implements hook_mail_alter().
+ */
+function petitions_profanity_mail_alter(&$message) {
+  // petitions_profanity_test_mode must be set to 1 or 0 (or unset).
+  if (($message['id'] == 'wh_petitions_review_threshold_passed') || variable_get('petitions_profanity_test_mode', '')) {
+
+    if (petitions_data_mongo_reads_are_enabled()) {
+      // Remove this section as part of mongo2mysql
+      if (!empty($message['params']['petition_id'])) {
+        $petition_id = $message['params']['petition_id'];
+      }
+      elseif (!empty($message['params']['petition']['_id'])) {
+        $petition_id = $message['params']['petition']['_id']->__toString();
+      }
+      else {
+        watchdog('petitions_profanity', "petitions_profanity_mail_alter: No petition id found.", array(), WATCHDOG_ALERT);
+        return;
+      }
+
+      $conn = wh_petitions_mongo_petition_connection();
+      $petition = wh_petitions_load_slim_petition($conn, $petition_id, array('title', 'body', 'user_tags'));
+      $petition_title = $petition['title'];
+      $petition_body = $petition['body'];
+
+    }
+    else {
+      $petition = $message['params']['petition'];
+      if (!is_array($petition)) {
+        $petition = (array) $petition;
+      }
+      $petition_id = $petition['nid'];
+      $petition_title = $petition['title'];
+      $petition_body = $petition['body'][$petition['language']][0]['value'];
+    }
+
+    $profanity_flag = (is_profane($petition_body) || is_profane($petition_title)) ? check_plain(variable_get('profanity_alert_text', '[HAS PROFANITY]')) : '';
+    $message['subject'] = $profanity_flag . ' ' . variable_get('wh_petitions_review_threshold_passed_subject', '');
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function petitions_profanity_form_alter(&$form, &$form_state, $form_id) {
+  switch ($form_id) {
+    case 'is_profane_form':
+      $form['profanity_alert_text'] = array(
+        '#title' => t("Email profanity alert text"),
+        '#description' => t('This will add a flag (e.g. HAS PROFANITY) to the beginning of the subject line when a notification email is sent to site administrator(s) for petitions that have crossed the review threshhold. Note: The profanity flag is only added for "threshold passed" notifications about petitions with profanity. This flag will not be added to other emails sent by the system.'),
+        '#type' => 'textfield',
+        '#default_value' => variable_get('profanity_alert_text', '[HAS PROFANITY]'),
+      );
+  }
+}

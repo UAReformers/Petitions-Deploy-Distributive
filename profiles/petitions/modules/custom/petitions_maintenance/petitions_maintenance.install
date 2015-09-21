@@ -1,0 +1,139 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the Petitions Maintenance module.
+ */
+
+/**
+ * Implements hook_update_last_removed().
+ */
+function petitions_maintenance_update_last_removed() {
+  return 7012;
+}
+
+/**
+ * Prepare the site to run Petitions 7.x-3.*.
+ *
+ * Note: This makes petition and signature storage in MySQL possible.
+ */
+function petitions_maintenance_update_7300(&$sandbox) {
+  // Enable new modules.
+  $modules = array(
+    'migrate_mongo2mysql_petsig',
+    'petition',
+    'petitionadmin',
+    'petitionevents',
+    'petition_pages',
+    'petitionsmongo2mysqlintegrity',
+    'signature',
+    'signature_mail',
+  );
+  module_enable($modules);
+
+  // Trip shunts.
+  $shunts = array('petition_mysql_save', 'signature_mail_mysql_save');
+  foreach ($shunts as $shunt) {
+    // Set the variables directly. For some reason, shunt_enable_shunt() doesn't
+    // detect the new shunts here.
+    $variable = _shunt_get_variable_name($shunt);
+    variable_set($variable, TRUE);
+  }
+}
+
+/**
+ * Apply changes for new monitoring tools.
+ */
+function petitions_maintenance_update_7301(&$sandbox) {
+  // Enable new modules.
+  $modules = array('petitionslog');
+  module_enable($modules);
+
+  // Change admin theme to Seven.
+  variable_set('admin_theme', 'seven');
+}
+
+/**
+ * Remove formatforlog module.
+ */
+function petitions_maintenance_update_7302(&$sandbox) {
+  db_delete('system')
+    ->condition('name', 'formatforlog')
+    ->execute();
+}
+
+/**
+ * Remove colorbox module.
+ */
+function petitions_maintenance_update_7303(&$sandbox) {
+  db_delete('system')
+    ->condition('name', 'colorbox')
+    ->execute();
+  db_query("DELETE FROM {variable} WHERE name LIKE 'colorbox_%'");
+}
+
+/**
+ * Install new modules.
+ */
+function petitions_maintenance_update_7304(&$sandbox) {
+  module_enable(array('efq_extra_field'));
+}
+
+/**
+ * Install petitionadmin_reports modules.  Revert petitionadmin feature.
+ */
+function petitions_maintenance_update_7307(&$sandbox) {
+  module_enable(array('petitionadmin_reports'));
+
+  $features = array(
+    'wh_response_feature' => array('petitionadmin'),
+  );
+
+  // Revert the feature.
+  features_revert($features);
+
+  // Remove orphaned Drupal Actions.
+  actions_synchronize(actions_list(), TRUE);
+}
+
+/**
+ * Install new modules.
+ */
+function petitions_maintenance_update_7308(&$sandbox) {
+  module_enable(array('apachesolr'));
+}
+
+/**
+ * Install prevent_user_login module.
+ */
+function petitions_maintenance_update_7309(&$sandbox) {
+  module_enable(array('prevent_user_login'));
+
+  // Assign the block to the takeover region. Before we can write directly to
+  // the database, we have to force drupal to write the new block definition by
+  // calling _block_rehash('petitions44).
+  _block_rehash('petitions44');
+
+  db_merge('block')
+    ->key(array(
+      'theme' => 'petitions44',
+      'delta' => 'prevent_user_login_block',
+      'module' => 'prevent_user_login',
+    ))
+    ->fields(array(
+      'region' => 'takeover',
+      'status' => 1,
+      'weight' => 50,
+      'visibility' => BLOCK_VISIBILITY_NOTLISTED,
+    ))
+    ->execute();
+
+}
+
+/**
+ * Install and configure Transliteration module.
+ */
+function petitions_maintenance_update_7310(&$sandbox) {
+  module_enable(array('transliteration'));
+  variable_set('pathauto_transliterate', 1);
+}

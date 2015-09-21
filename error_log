@@ -1,0 +1,1 @@
+[21-Sep-2015 15:04:06 America/Chicago] PHP Fatal error:  Call to undefined function mongodb_collection() in /home/petitions/public_html/profiles/petitions/modules/custom/wh_petitions/wh_petitions.module on line 2021

@@ -1,0 +1,651 @@
+<?php
+
+/**
+ * @file
+ * The signature queue system.
+ *
+ * Provides a queue-based backend for processing petition signatures submitted
+ * via the API.
+ */
+
+/**
+ * The default workflow batch size.
+ */
+define('SIGNATURES_QUEUE_BATCH_SIZE_DEFAULT', 10);
+
+/**
+ * The default value for the server-name event logging value.
+ */
+define('SIGNATURES_QUEUE_SERVER_NAME_DEFAULT', 'default');
+
+/**
+ * The default value for the worker-name event logging value.
+ */
+define('SIGNATURES_QUEUE_WORKER_NAME_DEFAULT', 'default');
+
+/**
+ * Standard response for successful HTTP requests.
+ */
+define('SIGNATURES_QUEUE_STATUS_OK', 200);
+
+/**
+ * The request cannot be fulfilled due to bad syntax.
+ */
+define('SIGNATURES_QUEUE_STATUS_BAD_REQUEST', 400);
+
+/**
+ * The request was a valid request, but the server is refusing to respond to it.
+ */
+define('SIGNATURES_QUEUE_STATUS_FORBIDDEN', 403);
+
+/**
+ * The requested resource could not be found.
+ */
+define('SIGNATURES_QUEUE_STATUS_NOT_FOUND', 404);
+
+/**
+ * The status code for an error on the server side.
+ */
+define('SIGNATURES_QUEUE_STATUS_SERVER_ERROR', 500);
+
+/**
+ * Implements hook_menu().
+ */
+function signatures_queue_menu() {
+  $items = array();
+
+  $items['admin/config/system/signatures-queue'] = array(
+    'title' => 'Petition Signatures Queue',
+    'description' => 'Overview of petition signatures queue system',
+    'page callback' => 'signatures_queue_overview',
+    'access arguments' => array('monitor queues'),
+    'file' => 'signatures_queue.pages.inc',
+  );
+  $items['admin/config/system/signatures-queue/monitor'] = array(
+    'title' => 'Monitor',
+    'description' => 'Monitor signature queues',
+    'page callback' => 'signatures_queue_monitor_page',
+    'access arguments' => array('monitor queues'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 1,
+    'file' => 'signatures_queue.pages.inc',
+  );
+  $items['admin/config/system/signatures-queue/settings'] = array(
+    'title' => 'Settings',
+    'description' => 'Configure signature queues',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('signatures_queue_configure'),
+    'access arguments' => array('administer queues'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 3,
+    'file' => 'signatures_queue.admin.inc',
+  );
+  $items['thank-you'] = array(
+    'title' => 'Thank You',
+    'page callback' => '_signatures_queue_validation_page_callback',
+    'access arguments' => array('validate petition signatures'),
+    'file' => 'signatures_queue.pages.inc',
+  );
+  $items['thank-you/%'] = array(
+    'title' => 'Thank You',
+    'page callback' => '_signatures_queue_validated_page_callback',
+    'page arguments' => array(1),
+    'access arguments' => array('validate petition signatures'),
+    'file' => 'signatures_queue.pages.inc',
+  );
+  $items['validation-error'] = array(
+    'title' => 'Validation Error',
+    'page callback' => '_signatures_queue_validation_error_page_callback',
+    'access arguments' => array('access content'),
+    'file' => 'signatures_queue.pages.inc',
+  );
+  $items['petition-error'] = array(
+    'title' => 'Petition Not Found',
+    'page callback' => '_signatures_queue_petition_error_page_callback',
+    'access arguments' => array('access content'),
+    'file' => 'signatures_queue.pages.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function signatures_queue_permission() {
+  return array(
+    'administer queues' => array(
+      'title' => t('Administer signatures queue'),
+    ),
+    'monitor queues' => array(
+      'title' => t('Monitor signatures queue'),
+    ),
+    'validate petition signatures' => array(
+      'title' => t('Validate petition signatures'),
+      'description' => t('Validate petition signatures by visiting their email verification links.'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_libraries_info().
+ */
+function signatures_queue_libraries_info() {
+  $libraries['disposable_email_checker'] = array(
+    'name' => 'Disposable Email Checker',
+    'vendor url' => 'https://github.com/vboctor/disposable_email_checker',
+    'download url' => 'https://github.com/vboctor/disposable_email_checker/releases',
+    'path' => 'php',
+    'version arguments' => array(
+      'file' => 'changelog.txt',
+      'pattern' => '/ - ([\d\.]+)/',
+      'lines' => 4,
+    ),
+    'files' => array(
+      'php' => array('disposable.php'),
+    ),
+  );
+  return $libraries;
+}
+
+/**
+ * Implements hook_mail().
+ */
+function signatures_queue_mail($key, &$message, $params) {
+  $language = $message['language'];
+  switch ($key) {
+    case 'initiate_signature_validation':
+      module_load_include('inc', 'signatures_queue');
+      $message['subject'] = _signatures_queue_validation_mail_text($key . '_subject', $language, $params);
+      $message['body'][] = _signatures_queue_validation_mail_text($key . '_body', $language, $params);
+      // Pass link as metadata to Mandrill.
+      $message['metadata'] = array('validation_link' => $params['signature info']['validation_link']);
+      break;
+
+    case 'notify_admin':
+      $message['subject'] = _signatures_queue_notify_admin_text('subject', $language, $params);
+      $message['body'] = _signatures_queue_notify_admin_text('body', $language, $params);
+      break;
+  }
+}
+
+/**
+ * Implements hook_theme().
+ */
+function signatures_queue_theme($existing, $type, $theme, $path) {
+  return array(
+    'signatures_queue_validation_thank_you' => array(
+      'template' => 'templates/signatures_queue-validation-thank-you',
+    ),
+  );
+}
+
+/**
+ * Token callback to add unsafe tokens for signature validation mails.
+ *
+ * This function is used by the token_replace() call at the end of
+ * _signatures_queue_validation_mail_text() to set up some additional tokens
+ * that can be used in email messages generated by
+ * _signatures_queue_send_validation_emails().
+ *
+ * @param array $replacements
+ *   An associative array variable containing mappings from token names to
+ *   values (for use with strtr()).
+ * @param array $data
+ *   An associative array of token replacement values.
+ * @param array $options
+ *   Unused parameter required by the token_replace() function.
+ */
+function signatures_queue_validation_email_tokens(array &$replacements, array $data, array $options) {
+  if (isset($data['signature info'])) {
+    global $base_url;
+    $website_url = variable_get('petitions_data_petitions_website_url', $base_url);
+
+    // Sanitize petition data.
+    foreach ($data['signature info'] as $key => $info) {
+      $data['signature info'][$key] = check_plain((string) $info);
+    }
+
+    // Tokens for all values in the signature_info array.
+    // Creating $petition_id because it will be used several times.
+    $petition_id = $data['signature info']['petition_id'];
+    $replacements['[signature:petition-id]'] = $petition_id;
+    $replacements['[signature:first-name]'] = $data['signature info']['first_name'];
+    $replacements['[signature:last-name]'] = $data['signature info']['last_name'];
+    $replacements['[signature:zip]'] = $data['signature info']['zip'];
+    $replacements['[signature:email]'] = $data['signature info']['email'];
+    $replacements['[signature:signup]'] = $data['signature info']['signup'];
+    $replacements['[signature:timestamp-submitted]'] = $data['signature info']['timestamp_received_new_signature'];
+    // Creating $key because it will be used several times.
+    $key = $data['signature info']['secret_validation_key'];
+    $replacements['[signature:secret-validation-key]'] = $key;
+    // Creating $md5 because it will be used several times.
+    $md5 = $data['signature info']['md5_encryption_key'];
+    $replacements['[signature:signature-md5-encryption-key]'] = $md5;
+    // Creating $validation_expiration because it will be used several times.
+    $validation_expiration = $data['signature info']['timestamp_validation_close'];
+    $replacements['[signature:timestamp_validation_close]'] = $validation_expiration;
+    // Creating $signature_source_api_key because it will be used several times.
+    $signature_source_api_key = $data['signature info']['signature_source_api_key'];
+    $replacements['[signature:signature-source-api-key]'] = $signature_source_api_key;
+    if (module_exists('api_key_manager')) {
+      // Creating $key_node because it will be used several times.
+      $key_node = api_key_manager_get_key($signature_source_api_key);
+
+      $replacements['[signature:signature-source-name]'] = $key_node->field_api_key_manager_name['und'][0]['value'];
+      $replacements['[signature:signature-source-url]'] = $key_node->field_api_key_manager_url['und'][0]['value'];
+
+      if (!empty($key_node->field_api_key_manager_desc['und'][0]['value'])) {
+        $replacements['[signature:signature-source-description]'] = $key_node->field_api_key_manager_desc['und'][0]['value'];
+      }
+      if (!empty($key_node->field_api_key_manager_org['und'][0]['value'])) {
+        $replacements['[signature:signature-source-organization]'] = $key_node->field_api_key_manager_org['und'][0]['value'];
+      }
+      if (!empty($key_node->field_api_key_manager_phone['und'][0]['value'])) {
+        $replacements['[signature:signature-source-phone]'] = $key_node->field_api_key_manager_phone['und'][0]['value'];
+      }
+
+    }
+    // Tokens for additional values.
+    $replacements['[signature:validation-url]'] = _signatures_queue_validation_link($website_url, $data['signature info']);
+    // Load the petition via the API retrieve method.
+    $petition = PetitionsController::load($petition_id);
+    if (!empty($petition)) {
+      // Tokens for values associated to the petition.
+      $replacements['[petition:title]'] = $petition['title'];
+      $replacements['[petition:body]'] = $petition['body'];
+      $replacements['[petition:url]'] = $petition['url'];
+      $replacements['[petition:deadline]'] = date('l, F j, Y', $petition['deadline']);
+    }
+  }
+}
+
+
+/**
+ * Implements hook_shunt().
+ */
+function signatures_queue_shunt() {
+  // Automatically declare a shunt for each workflow.
+  $shunts = array();
+  $workflows = signatures_queue_get_workflow_names();
+  foreach ($workflows as $workflow) {
+    $name = "shunt_signatures_queue_{$workflow}";
+    $description = t('A shunt for the "@workflow" workflow.', array(
+      '@workflow' => str_replace('_', ' ', ucfirst($workflow)),
+    ));
+    $shunts[$name] = $description;
+  }
+
+  $shunts['signatures_queue_receive_new_signatures_validate_petition'] = t('Prevents the "receive new signatures" workflow from validating the requested petition ID, so that the workflow performs no database queries.');
+
+  return $shunts;
+}
+
+/**
+ * Gets the domain name from an email address.
+ *
+ * @param string $address
+ *   An email address.
+ *
+ * @return string|false
+ *   The domain name portion of the given email address, or FALSE if it is not a
+ *   valid email address.
+ */
+function signatures_queue_get_domain_from_email($address) {
+  // Inline the valid_email_address() test to keep this unit-testable. It's the
+  // lesser of two evils. :(
+  if (!filter_var($address, FILTER_VALIDATE_EMAIL)) {
+    return FALSE;
+  }
+
+  $parts = explode('@', $address);
+  return strtolower($parts[count($parts) - 1]);
+}
+
+/**
+ * Gets an array of queue names.
+ *
+ * Note: Real queues are named something_queue. The tables listed here that
+ * don't end in the suffix "_queue" aren't actually queues. Conceptually
+ * they're part of the "signatures queue" in the sense that these are holding
+ * bins where signatures go before they're done being processed and counted.
+ * But they're not DrupalQueue queues.
+ *
+ * @return array
+ *   Array of signature queues and descriptions keyed by queue name.
+ */
+function signatures_queue_get_queue_names() {
+  return array(
+    'signatures_submitted_queue' => t('Queue submissions received via API POST requests or form submissions by unauthenticated users.'),
+    'signatures_pending_validation_queue' => t('Retrieve petitions from signatures_submitted_queue, send a validation email, then move the pending signature here.'),
+    'validations_queue' => t('When a user clicks a validation link received via email, store the secret validation key here.'),
+    'validations' => t('Move records from validations_queue to here for processing.'),
+    'signatures_pending_validation' => t('Move records from signatures_pending_validation_queue to here for processing.'),
+    'validations_orphaned' => t('When processing validated signatures, records in validations that do not have matching records in signatures_pending_validation are orphans.'),
+  );
+}
+
+/**
+ * Gets the time elapsed since a given timestamp, measured in microseconds.
+ *
+ * Because its input is in timestamps (not "micro timestamps", if you will),
+ * this function can only be accurate to the nearest second. It's value is not
+ * actually in precision but in enforcing a common unit of measure.
+ *
+ * @param int $timestamp
+ *   A timestamp, as returned from time().
+ *
+ * @return int
+ *   The number of microseconds elapsed.
+ *
+ * @see timer_read()
+ */
+function signatures_queue_get_microtime_elapsed_since($timestamp) {
+  return (int) round((time() - $timestamp) * 1000);
+}
+
+/**
+ * Gets a list of workflow names.
+ *
+ * @return array
+ *   An indexed array of workflow names.
+ */
+function signatures_queue_get_workflow_names() {
+  return array(
+    'receive_new_signatures',
+    'initiate_signature_validation',
+    'receive_signature_validation',
+    'preprocess_signatures',
+    'process_signatures',
+    'archive_signatures',
+  );
+}
+
+/**
+ * Invokes a given workflow.
+ *
+ * This function is normally invoked via Drush (i.e.
+ * `drush signatures-queue-invoke-workflow`), except for user-initiated
+ * workflows.
+ *
+ * @param string $workflow
+ *   The name of the workflow to invoke, as defined in
+ *   signatures_queue_get_workflow_names().
+ * @param array $options
+ *   (optional) An array of arbitrary options data as required by particular
+ *   workflows. Defaults to an empty array. In addition to workflow-specific
+ *   options, the invoker expects these (key, value) pairs:
+ *   - server_name: (optional) An arbitrary identifier for the server processing
+ *     the workflow. Defaults to SIGNATURES_QUEUE_SERVER_NAME_DEFAULT.
+ *   - worker_name: (optional) An arbitrary identifier for the invoking process
+ *     (e.g., cron job). Defaults to SIGNATURES_QUEUE_WORKER_NAME_DEFAULT.
+ *
+ * @return int
+ *   Returns one of the following status codes indicating the workflow outcome:
+ *     - SIGNATURES_QUEUE_STATUS_OK
+ *     - SIGNATURES_QUEUE_STATUS_BAD_REQUEST
+ *     - SIGNATURES_QUEUE_STATUS_FORBIDDEN
+ *     - SIGNATURES_QUEUE_STATUS_NOT_FOUND
+ *     - SIGNATURES_QUEUE_STATUS_SERVER_ERROR
+ *
+ * @throws Exception()
+ *   If an invalid workflow is specified.
+ */
+function signatures_queue_invoke_workflow($workflow, array $options = array()) {
+  // Initialize default options.
+  $server_name = (!empty($options['server_name'])) ? $options['server_name'] : SIGNATURES_QUEUE_SERVER_NAME_DEFAULT;
+  $worker_name = (!empty($options['worker_name'])) ? $options['worker_name'] : SIGNATURES_QUEUE_WORKER_NAME_DEFAULT;
+
+  // Make sure given workflow is valid.
+  if (!in_array($workflow, signatures_queue_get_workflow_names())) {
+    throw new Exception("No such workflow '{$workflow}'.");
+  }
+
+  // Detect a shunt trip.
+  $shunt_name = "shunt_signatures_queue_{$workflow}";
+  if (shunt_is_enabled($shunt_name)) {
+    petitionslog_event("signatures_queue.workflow.{$workflow}.status.shunted");
+    return SIGNATURES_QUEUE_STATUS_SERVER_ERROR;
+  }
+
+  // Invoke the workflow.
+  module_load_include('inc', 'signatures_queue');
+  $job_id = _signatures_queue_create_job_id($workflow, $server_name, $worker_name);
+  try {
+    // Get the workflow function.
+    module_load_include('inc', 'signatures_queue', "includes/{$workflow}");
+    $function_name = "_signatures_queue_{$workflow}";
+    if (!function_exists($function_name)) {
+      $message = t('Workflow function @function_name is undefined. The codebase may be corrupt.', array(
+        '@function_name' => $function_name,
+      ));
+      throw new Exception($message);
+    }
+
+    // Log workflow invocation.
+    petitionslog_event("signatures_queue.workflow.{$workflow}.invoked");
+
+    // Dispatch the worker.
+    timer_start('signatures_queue_workflow');
+    $status = call_user_func($function_name, $job_id, $server_name, $worker_name, $options);
+    timer_stop('signatures_queue_workflow');
+
+    // Log workflow completion details.
+    petitionslog_event("signatures_queue.workflow.{$workflow}.completed");
+    petitionslog_event("signatures_queue.workflow.{$workflow}.processing_time", 'time', (int) timer_read('signatures_queue_workflow'));
+    $log_status = _signatures_queue_get_loggable_workflow_status($workflow, $status);
+    petitionslog_event("signatures_queue.workflow.{$workflow}.status.{$log_status}");
+  }
+  catch (Exception $e) {
+    petitionslog_event("signatures_queue.workflow.{$workflow}.status.server_error");
+    $watchdog_suffix = _signatures_queue_watchdog_suffix($workflow, $job_id, $server_name, $worker_name);
+    watchdog('signatures_queue', "Fatal error in workflow. @suffix\n\n@exception", array(
+      '@suffix' => $watchdog_suffix,
+      '@exception' => print_r($e, TRUE),
+    ), WATCHDOG_ERROR);
+    return SIGNATURES_QUEUE_STATUS_SERVER_ERROR;
+  }
+
+  return $status;
+}
+
+/**
+ * Determines whether a given email address is disposable or not.
+ *
+ * @param string $address
+ *   An email address to test.
+ *
+ * @return bool
+ *   TRUE if the email address is disposable, or FALSE if not.
+ */
+function signatures_queue_is_disposable_email($address) {
+  libraries_load('disposable_email_checker');
+  return DisposableEmailChecker::is_disposable_email($address);
+}
+
+/**
+ * Determines whether a given email address is subaddressed or not.
+ *
+ * Subaddressed email addresses, also known as plus addresses or tagged
+ * addresses, have the form username+tag@domain.tld.
+ *
+ * @param string $address
+ *   An email address to test.
+ *
+ * @return bool
+ *   TRUE if the email address is subaddressed, or FALSE if not.
+ *
+ * @see https://en.wikipedia.org/wiki/Email_address#Address_tags
+ */
+function signatures_queue_is_subaddressed_email($address) {
+  // A subaddressed email address must contain a username and a plus sign. Match
+  // any string that begins with one or more characters other than an at sign
+  // (@), followed by a plus sign (+).
+  return (preg_match('/^[^@]+\+/', $address) == 1);
+}
+
+/**
+ * Gets a status string usable for logging from a workflow status return value.
+ *
+ * @param string $workflow
+ *   The name of the workflow to invoke, as defined in
+ *   signatures_queue_get_workflow_names().
+ * @param int $status
+ *   The status value returned from a workflow function.
+ *
+ * @return string
+ *   A string usable as a status code in logging, e.g., "ok" or "bad_request".
+ */
+function _signatures_queue_get_loggable_workflow_status($workflow, $status) {
+  $status_mappings = array(
+    SIGNATURES_QUEUE_STATUS_OK => 'ok',
+    SIGNATURES_QUEUE_STATUS_BAD_REQUEST => 'bad_request',
+    SIGNATURES_QUEUE_STATUS_FORBIDDEN => 'forbidden',
+    SIGNATURES_QUEUE_STATUS_NOT_FOUND => 'not_found',
+    SIGNATURES_QUEUE_STATUS_SERVER_ERROR => 'server_error',
+  );
+  if (array_key_exists($status, $status_mappings)) {
+    $log_status = $status_mappings[$status];
+  }
+  else {
+    $log_status = 'unknown';
+    watchdog('signatures_queue', 'Workflow "@workflow" returned unknown status code: @status.', array(
+      '@workflow' => $workflow,
+      '@status' => $status,
+    ));
+  }
+  return $log_status;
+}
+
+/**
+ * Logs metrics around the size of a given data store (table or queue).
+ *
+ * @param string $data_store_name
+ *   The name of the data store.
+ * @param int $record_count
+ *   The number of items in the data store.
+ */
+function _signatures_queue_data_store_size_event($data_store_name, $record_count) {
+  $record_count = (int) $record_count;
+
+  // Log the size.
+  petitionslog_event("signatures_queue.data_store.{$data_store_name}.size", 'gauge', $record_count);
+
+  // Log if empty.
+  if ($record_count == 0) {
+    petitionslog_event("signatures_queue.data_store.{$data_store_name}.emptied");
+  }
+}
+
+/**
+ * Set active database according to settings.php configuration.
+ *
+ * Don't forget to call db_set_active() to set back to default after using this.
+ */
+function signatures_queue_set_db($conf_name = 'signatures_processing') {
+  global $databases;
+  global $drupal_test_info;
+
+  // If this is a simpletest run, do not switch dbs. Simpletest prefixing
+  // does not support multiple databases.
+  if (empty($drupal_test_info['test_run_id']) && !empty($databases[$conf_name])) {
+    // Set database so that we create the tables there.
+    db_set_active($conf_name);
+  }
+  // If the database is not defined, set back to the default db.
+  elseif (empty($databases[$conf_name])) {
+    db_set_active();
+  }
+}
+
+/**
+ * Get the admin-defined batch size for a given workflow.
+ *
+ * @param string $workflow
+ *   The machine name of the workflow as returned from
+ *   signatures_queue_get_workflow_names().
+ *
+ * @return int|false
+ *   The batch size if the given workflow is valid, or FALSE if it is not.
+ */
+function signatures_queue_get_queue_batch_size($workflow) {
+  // Fail if given workflow is invalid.
+  if (!in_array($workflow, signatures_queue_get_workflow_names())) {
+    return FALSE;
+  }
+
+  // Get the size from the configured variable.
+  $batch_size = variable_get("signatures_queue_${workflow}_batch_size", SIGNATURES_QUEUE_BATCH_SIZE_DEFAULT);
+  return (int) $batch_size;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function signatures_queue_form_alter(&$form, &$form_state, $form_id) {
+  // Add signature validation email fields to the wh_petitions form.
+  if ($form_id == 'wh_petitions_admin_petition_email_settings') {
+    module_load_include('inc', 'signatures_queue');
+
+    // Signature validation email settings.
+    $signature_validation_email_token_help = t('Available tokens are: !site-name, !signature-first-name, !signature-last-name, !signature-zip, !signature-email, !signature-signup, !signature-timestamp, !signature-secret, !signature-md5, !signature-close, !source-name, !source-desc, !source-url, !source-org, !source-phone, !source-key, !signature-validation-url, !petition-title, !petition-body, !petition-url, !petition-deadline.', array(
+      '!site-name' => '[site:name]',
+      '!signature-first-name' => '[signature:first-name]',
+      '!signature-last-name' => '[signature:last-name]',
+      '!signature-zip' => '[signature:zip]',
+      '!signature-email' => '[signature:email]',
+      '!signature-signup' => '[signature:signup]',
+      '!signature-timestamp' => '[signature:timestamp-submitted]',
+      '!signature-secret' => '[signature:secret-validation-key]',
+      '!signature-md5' => '[signature:signature-md5-encryption-key]',
+      '!signature-close' => '[signature:timestamp_validation_close]',
+      '!source-name' => '[signature:signature-source-name]',
+      '!source-desc' => '[signature:signature-source-description]',
+      '!source-url' => '[signature:signature-source-url]',
+      '!source-org' => '[signature:signature-source-organization]',
+      '!source-phone' => '[signature:signature-source-phone]',
+      '!source-key' => '[signature:signature-source-api-key]',
+      '!signature-validation-url' => '[signature:validation-url]',
+      '!petition-title' => '[petition:title]',
+      '!petition-body' => '[petition:body]',
+      '!petition-url' => '[petition:url]',
+      '!petition-deadline' => '[petition:deadline]',
+    ));
+
+    $form['signature_validation_email'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Notification: You must validate your signature for it to be counted'),
+      '#description' => t('Edit the signature validation e-mail message.') . ' ' . $signature_validation_email_token_help,
+      '#weight' => 1,
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+    );
+    $form['signature_validation_email']['user_mail_initiate_signature_validation_subject'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Subject'),
+      '#default_value' => _signatures_queue_validation_mail_text('initiate_signature_validation_subject', NULL, array(), FALSE),
+      '#maxlength' => 180,
+    );
+    $form['signature_validation_email']['user_mail_initiate_signature_validation_body'] = array(
+      '#type' => 'textarea',
+      '#title' => t('Body'),
+      '#default_value' => _signatures_queue_validation_mail_text('initiate_signature_validation_body', NULL, array(), FALSE),
+      '#rows' => 15,
+    );
+  }
+}
+
+/**
+ * Find out when queue(s) were last emptied.
+ *
+ * @param string $name
+ *   (Optional) The machine name of a signatures queue.
+ *
+ * @return array
+ *   Returns array keyed by queue name(s). Value is a timestamp of when queue
+ *   was last emptied.
+ */
+function signatures_queue_check_empty($name = NULL) {
+  module_load_include('inc', 'signatures_queue');
+  return _signatures_queue_check_empty($name);
+}

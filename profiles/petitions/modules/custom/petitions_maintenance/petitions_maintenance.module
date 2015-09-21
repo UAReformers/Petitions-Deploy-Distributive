@@ -1,0 +1,9 @@
+<?php
+
+/**
+ * @file
+ * Manages Petitions application maintenance tasks.
+ *
+ * Even though it's empty, this file is required for Drupal to recognize the
+ * module.
+ */

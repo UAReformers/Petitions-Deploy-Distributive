@@ -1,0 +1,656 @@
+<?php
+
+/**
+ * @file
+ * Provides a form for signing petitions.
+ */
+
+/**
+ * The machine name of the Petitions PHP SDK library.
+ */
+define('PETITIONSSIGNATUREFORM_SDK', 'petitions-php-sdk');
+
+/**
+ * Block form argument method: none.
+ */
+define('PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_NONE', 0);
+
+/**
+ * Block form argument method: petition ID.
+ */
+define('PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_ID', 1);
+
+/**
+ * Block form argument method: path.
+ */
+define('PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_PATH', 2);
+
+/**
+ * The block form argument location: path.
+ */
+define('PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_LOCATION_PATH', 0);
+
+/**
+ * The block form argument location: arg().
+ */
+define('PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_LOCATION_ARG', 1);
+
+/**
+ * Implements hook_libraries_info().
+ */
+function petitionssignatureform_libraries_info() {
+  $libraries[PETITIONSSIGNATUREFORM_SDK] = array(
+    'name' => 'Petitions PHP SDK',
+    'vendor url' => 'https://github.com/WhiteHouse/petitions-php-sdk',
+    'download url' => 'https://github.com/WhiteHouse/petitions-php-sdk/releases',
+    'version arguments' => array(
+      'file' => 'petitions_php_sdk.php',
+      'pattern' => '/@version ([\d\.]+)/',
+    ),
+    'files' => array(
+      'php' => array('petitions_php_sdk.php'),
+    ),
+  );
+  return $libraries;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function petitionssignatureform_menu() {
+  $items = array();
+
+  $items['admin/config/services/petitionssignatureform'] = array(
+    'title' => 'Petitions Signature Form',
+    'description' => 'Configure petitions signature forms.',
+    'type' => MENU_NORMAL_ITEM,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('petitionssignatureform_admin_settings_form'),
+    'access arguments' => array('administer petitionssignatureform'),
+    'file' => 'petitionssignatureform.admin.inc',
+  );
+
+  $items['admin/config/services/petitionssignatureform/configure'] = array(
+    'title' => 'Configure',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+  );
+
+  $items['admin/config/services/petitionssignatureform/test'] = array(
+    'title' => 'Test',
+    'description' => 'Test petitions signature form submission.',
+    'type' => MENU_LOCAL_TASK,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('petitionssignatureform_signature_form'),
+    'access arguments' => array('administer petitionssignatureform'),
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function petitionssignatureform_permission() {
+  return array(
+    'administer petitionssignatureform' => array(
+      'title' => t('Administer Petitions Signature Form'),
+    ),
+  );
+}
+
+/**
+ * Form constructor for the petitions signature form.
+ *
+ * @param string $petition_id
+ *   (optional) The ID of a petition to send the signature to. If supplied, the
+ *   "Petition ID" field will be auto-filled and hidden from the end user.
+ *
+ * @throws InvalidArgumentException
+ *   If an invalid petition ID is supplied.
+ */
+function petitionssignatureform_signature_form($form, &$form_state, $petition_id = NULL) {
+  petitionssignatureform_log_event('petitionssignatureform.form.displayed');
+
+  // Make sure the petition ID is valid if supplied.
+  if (isset($petition_id) && (!is_string($petition_id) || !strlen($petition_id))) {
+    petitionssignatureform_log_event('petitionssignatureform.form.display_status.invalid_petition_id');
+    throw new InvalidArgumentException('Invalid Petition ID.');
+  }
+
+  // Don't display the form if the module isn't properly configured.
+  if (!petitionssignatureform_module_is_configured()) {
+    petitionssignatureform_log_event('petitionssignatureform.form.display_status.configuration_error');
+    $message = t('The petition signature form is not yet <a href="@url">configured</a>.', array(
+      '@url' => url('admin/config/services/petitionssignatureform/configure'),
+    ));
+    // Don't link to the configuration form unless the active user has access to
+    // it.
+    if (!user_access('administer petitionssignatureform')) {
+      $message = strip_tags($message);
+    }
+
+    $form['runtime_error'] = array('#markup' => $message);
+    return $form;
+  }
+
+  petitionssignatureform_log_event('petitionssignatureform.form.display_status.ok');
+
+  $form['#prefix'] = '<div id="formwrapper">';
+  $form['#suffix'] = '</div>';
+
+  $form['petition_id'] = array(
+    '#type' => (isset($petition_id)) ? 'hidden' : 'textfield',
+    '#title' => t('Petition ID'),
+    '#required' => TRUE,
+    '#default_value' => (isset($petition_id)) ? $petition_id : '',
+  );
+
+  $form['first_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('First Name'),
+    '#required' => TRUE,
+  );
+
+  $form['last_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Last Name'),
+    '#required' => TRUE,
+  );
+
+  $form['email'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Email Address'),
+    '#required' => TRUE,
+  );
+
+  $form['zip_code'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Zip Code'),
+    '#size' => 10,
+  );
+
+  $form['sign_up'] = array(
+    '#type' => 'checkbox',
+    '#title' => check_plain(petitionssignatureform_variable_get('petitionssignatureform_sign_up_field_label')),
+  );
+
+  $privacy_message = filter_xss_admin(petitionssignatureform_variable_get('petitionssignatureform_accepting_signatures_privacy_message'));
+  if (!empty($privacy_message)) {
+    $form['privacy_container'] = array(
+      '#type' => 'container',
+      '#attributes' => array('class' => array('privacy-container')),
+    );
+    $form['privacy_container']['privacy'] = array(
+      '#markup' => $privacy_message,
+    );
+  }
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Sign Now'),
+    '#ajax' => array(
+      'callback' => 'petitionsignatureform_ajax_submit',
+      'wrapper' => 'formwrapper',
+      'method' => 'replace',
+      'effect' => 'fade',
+    ),
+  );
+
+  $form['note_container'] = array(
+    '#type' => 'container',
+    '#attributes' => array('class' => array('note-container')),
+  );
+
+  $form['note_container']['note'] = array(
+    '#markup' => filter_xss_admin(petitionssignatureform_variable_get('petitionssignatureform_accepting_signatures_note')),
+  );
+
+  return $form;
+}
+
+/**
+ * The AJAX callback for the signature form submission.
+ *
+ * @see petitionssignatureform_signature_form()
+ */
+function petitionsignatureform_ajax_submit($form, $form_state) {
+  petitionssignatureform_log_event('petitionssignatureform.form.submitted');
+
+  // Validate the form.
+  drupal_validate_form('petitionssignatureform_signature_form', $form, $form_state);
+  if (form_get_errors()) {
+    // Prevent display of the error messages.
+    // @todo This will clobber ALL error messages--not just the expected form
+    //   validation error messages. A more sophisticated approach would probably
+    //   be preferable.
+    drupal_get_messages('error');
+    petitionssignatureform_log_event('petitionssignatureform.form.submission_status.validation_error');
+
+    // Rebuild and return the form.
+    $form_state['rebuild'] = TRUE;
+    return $form;
+  }
+
+  // The submission passed validation. Post the signature.
+  $base = petitionssignatureform_variable_get('petitionssignatureform_api_endpoint');
+  $key = petitionssignatureform_variable_get('petitionssignatureform_api_key');
+  $allow_insecure = (bool) petitionssignatureform_variable_get('petitionssignatureform_allow_insecure');
+  $success = FALSE;
+  try {
+    libraries_load(PETITIONSSIGNATUREFORM_SDK);
+    $connector = new PetitionsPhpSdkApiConnector($base, $key, $allow_insecure);
+
+    $signature = array(
+      'petition_id' => $form_state['values']['petition_id'],
+      'first_name' => $form_state['values']['first_name'],
+      'last_name' => $form_state['values']['last_name'],
+      'zip' => $form_state['values']['zip_code'],
+      'email' => $form_state['values']['email'],
+      'signup' => $form_state['values']['sign_up'],
+    );
+
+    $response = $connector->sendSignature($signature);
+
+    // Test for failure.
+    if ($response->metadata->responseInfo->status !== 200) {
+      throw new Exception(t('Response: !response', array(
+        '!response' => print_r($response, TRUE),
+      )));
+    }
+
+    // All clear!
+    $success = TRUE;
+  }
+  catch (Exception $e) {
+    watchdog('petitionssignatureform', "Error submitting signature: !exception", array(
+      '!exception' => petitionssignatureform_format_for_watchdog($e),
+    ), WATCHDOG_ERROR);
+  }
+
+  if ($success) {
+    petitionssignatureform_log_event('petitionssignatureform.form.submission_status.ok');
+    $title = petitionssignatureform_variable_get('petitionssignatureform_thank_you_title');
+    $message = petitionssignatureform_variable_get('petitionssignatureform_thank_you_message');
+  }
+  else {
+    petitionssignatureform_log_event('petitionssignatureform.form.submission_status.server_error');
+    $title = petitionssignatureform_variable_get('petitionssignatureform_submission_failed_title');
+    $message = petitionssignatureform_variable_get('petitionssignatureform_submission_failed_message');
+  }
+
+  return theme('petitionssignatureform_thank_you', array(
+    'title' => check_plain($title),
+    'message' => filter_xss_admin($message),
+  ));
+}
+
+/**
+ * Form validation handler for petitionssignatureform_signature_form().
+ *
+ * @see petitionssignatureform_signature_form()
+ */
+function petitionssignatureform_signature_form_validate($form, &$form_state) {
+  // Validate email address.
+  if (!valid_email_address($form_state['values']['email'])) {
+    form_set_error('email', 'Please enter a valid email address.');
+  }
+}
+
+/**
+ * Determines whether the module is configured for use.
+ *
+ * @return bool
+ *   Returns TRUE if the module is configured or FALSE if not.
+ */
+function petitionssignatureform_module_is_configured() {
+  // Make sure the API endpoint is a valid, absolute URL.
+  // @todo This logic is duplicated in
+  //   petitionssignatureform_admin_settings_form_validate() and should ideally
+  //   be centralized.
+  $api_endpoint = petitionssignatureform_variable_get('petitionssignatureform_api_endpoint');
+  if (!valid_url($api_endpoint, TRUE)) {
+    return FALSE;
+  }
+
+  // Make sure the API key is set.
+  $api_key = petitionssignatureform_variable_get('petitionssignatureform_api_key');
+  if (empty($api_key)) {
+    return FALSE;
+  }
+
+  // All good.
+  return TRUE;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function petitionssignatureform_theme() {
+  return array(
+    // Thank You message for form submission.
+    'petitionssignatureform_thank_you' => array(
+      'arguments' => array(),
+      'template' => 'templates/petitionssignatureform-thank-you',
+    ),
+  );
+}
+
+/**
+ * Gets Petitions Signature Form variables with default values.
+ *
+ * @return array
+ *   An array of variable defaults. Each item has a key corresponding to the
+ *   variable name and a value of the corresponding variable's default value.
+ */
+function petitionssignatureform_variable_defaults() {
+  return array(
+    'petitionssignatureform_accepting_signatures_title' => t('Sign this Petition:'),
+    'petitionssignatureform_accepting_signatures_note' => t('<p>Note: When you sign this petition, your initials, city, and state may be publicly displayed on the petition page. Once you sign a petition, you cannot remove your signature.</p>'),
+    'petitionssignatureform_accepting_signatures_privacy_message' => '',
+    'petitionssignatureform_allow_insecure' => FALSE,
+    'petitionssignatureform_api_endpoint' => '',
+    'petitionssignatureform_api_key' => '',
+    'petitionssignatureform_error_message' => t('Please contact an administrator.'),
+    'petitionssignatureform_error_title' => t('An error has occurred'),
+    'petitionssignatureform_form_petition_id_argument_location' => PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_LOCATION_PATH,
+    'petitionssignatureform_form_petition_id_argument_type' => PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_NONE,
+    'petitionssignatureform_no_signatures_message' => t('Sorry, this petition can not be signed.'),
+    'petitionssignatureform_no_signatures_title' => t('Petition Closed'),
+    'petitionssignatureform_petitions_website_url' => 'https://petitions.whitehouse.gov',
+    'petitionssignatureform_sign_up_field_label' => t('Sign up for updates on this and other issues.'),
+    'petitionssignatureform_submission_failed_message' => t('Sorry, there was a problem submitting your signature.'),
+    'petitionssignatureform_submission_failed_title' => t('Signature failed'),
+    'petitionssignatureform_thank_you_message' => t('<p>Check your inbox for an email from us and click on the link to verify your signature.</p>'),
+    'petitionssignatureform_thank_you_title' => t('Email Verification Required'),
+  );
+}
+
+/**
+ * Gets a persistent variable, accounting for Petitions Signature Form defaults.
+ *
+ * @param string $name
+ *   The name of the variable to return.
+ *
+ * @return mixed
+ *   The value of the variable. Unserialization is taken care of as necessary.
+ *
+ * @see variable_get()
+ */
+function petitionssignatureform_variable_get($name) {
+  $all_defaults = petitionssignatureform_variable_defaults();
+  $default = (array_key_exists($name, $all_defaults)) ? $all_defaults[$name] : NULL;
+  return variable_get($name, $default);
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function petitionssignatureform_block_info() {
+  $blocks = array();
+
+  $blocks['petitionssignatureform_form'] = array(
+    'info' => t('Petitions signature form'),
+  );
+
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_configure().
+ */
+function petitionssignatureform_block_configure($delta = '') {
+  $form = array();
+
+  switch ($delta) {
+    case 'petitionssignatureform_form':
+      // Argument method.
+      $form['form_petition_id_argument_type'] = array(
+        '#type' => 'select',
+        '#title' => t('Petition identifier to use'),
+        '#options' => array(
+          // @todo Allow the selection of the Petition ID option when ready to
+          //   implement.
+          PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_NONE => t('None'),
+          // PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_ID => t('Petition ID'),
+          PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_PATH => t('Petition path'),
+        ),
+        '#default_value' => petitionssignatureform_variable_get('petitionssignatureform_form_petition_id_argument_type'),
+      );
+      // Argument location.
+      $form['form_petition_id_argument_location'] = array(
+        '#type' => 'select',
+        '#title' => t('Location of the Petition identifier'),
+        '#options' => array(
+          // @todo Allow the selection of the Petition arg() options when ready
+          //   to implement.
+          PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_LOCATION_PATH => t('Use complete path'),
+          // PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_ID => t('Petition ID'),
+        ),
+        '#default_value' => petitionssignatureform_variable_get('petitionssignatureform_form_petition_id_argument_location'),
+      );
+      // @todo Add a field to input the argument number, AJAX-controlled by the
+      //   location field.
+      // @todo Add a thermometer toggle to this form.
+      break;
+  }
+  return $form;
+}
+
+/**
+ * Implements hook_block_save().
+ */
+function petitionssignatureform_block_save($delta = '', $edit = array()) {
+  switch ($delta) {
+    case 'petitionssignatureform_form':
+      // Save the argument method.
+      variable_set('petitionssignatureform_form_petition_id_argument_type', $edit['form_petition_id_argument_type']);
+      // Save the argument location.
+      variable_set('petitionssignatureform_form_petition_id_argument_location', $edit['form_petition_id_argument_location']);
+      // @todo Save pending settings here as they get implemented.
+      break;
+  }
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function petitionssignatureform_block_view($delta = '') {
+  $block = array();
+
+  switch ($delta) {
+    case 'petitionssignatureform_form':
+      $block = _petitionssignatureform_block_content();
+      break;
+  }
+
+  return $block;
+}
+
+/**
+ * Block content generation function.
+ *
+ * @return array
+ *   If the target petition is successfully retrieved, an associative array of
+ *   block data containing the following items:
+ *   - "subject": The block title as a string.
+ *   - "content": A renderable array of block content.
+ *   Otherwise an empty array, to prevent the block from appearing.
+ */
+function _petitionssignatureform_block_content() {
+  $petition_id = NULL;
+  $is_signable = NULL;
+
+  // Get block settings.
+  $arg_type = (int) petitionssignatureform_variable_get('petitionssignatureform_form_petition_id_argument_type');
+  $arg_location = (int) petitionssignatureform_variable_get('petitionssignatureform_form_petition_id_argument_location');
+  // @todo Get settings here as they get implemented.
+
+  // Get $petition object.
+  switch ($arg_type) {
+    case PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_PATH:
+      // Get petition ID from read API.
+      $petition = petitionssignatureform_get_petition($arg_location);
+      break;
+
+    case PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_ID:
+      // @todo Implement method ID here.
+    case PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_TYPE_NONE:
+    default:
+      // No petition identifier.
+      $petition = new stdClass();
+  }
+
+  // Populate variables.
+  $petition_id = (!empty($petition->id)) ? $petition->id : NULL;
+  $is_error = !$petition_id;
+  $is_signable = (!empty($petition->isSignable)) ? (bool) $petition->isSignable : FALSE;
+
+  // Petition could not be retrieved.
+  if ($is_error) {
+    petitionssignatureform_log_event('petitionssignatureform.form.display_status.invalid_petition_id');
+    $subject = petitionssignatureform_variable_get('petitionssignatureform_error_title');
+    $body = petitionssignatureform_variable_get('petitionssignatureform_error_message');
+  }
+
+  // Generate block content.
+  if ($is_signable) {
+    // If petition is signable, generate form.
+    $form = drupal_get_form('petitionssignatureform_signature_form', $petition_id);
+    $block['content'] = drupal_render($form);
+    $block['subject'] = check_plain(petitionssignatureform_variable_get('petitionssignatureform_accepting_signatures_title'));
+  }
+  else {
+    // Petition is not signable, let user know petition is not accepting
+    // signatures (or display nothing if that's what admin configured).
+    $subject = (isset($subject)) ? $subject : check_plain(petitionssignatureform_variable_get('petitionssignatureform_no_signatures_title'));
+    $body = (isset($body)) ? $body : petitionssignatureform_variable_get('petitionssignatureform_no_signatures_message');
+    $content = array(
+      '#type' => 'container',
+      '#attributes' => array(
+        'class' => array('signature-no-sign'),
+      ),
+      'content' => array(
+        '#type' => 'markup',
+        '#markup' => $body,
+        '#weight' => 0,
+      ),
+    );
+    $block['content'] = $content;
+    $block['subject'] = $subject;
+  }
+
+  return $block;
+}
+
+/**
+ * Retrieves petition from API call.
+ *
+ * @param int $arg_location
+ *   The value from Drupal variable
+ *   'petitionssignatureform_form_petition_id_argument_location'.
+ *
+ * @throws PetitionsPhpSdkResponseServerException
+ *   If there is an error reaching the API.
+ *
+ * @return object
+ *   Petition object from Petitions PHP SDK.
+ */
+function petitionssignatureform_get_petition($arg_location) {
+  $petition_url = NULL;
+
+  switch ($arg_location) {
+    case PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_LOCATION_PATH:
+      $petition_url = petitionssignatureform_variable_get('petitionssignatureform_petitions_website_url') . '/' . $_GET['q'];
+      break;
+
+    case PETITIONSSIGNATUREFORM_FORM_PETITION_ID_ARGUMENT_LOCATION_ARG:
+      // @todo Implement grabbing the petition url from arg() here.
+      break;
+
+    default:
+  }
+
+  $base = petitionssignatureform_variable_get('petitionssignatureform_api_endpoint');
+  $key = petitionssignatureform_variable_get('petitionssignatureform_api_key');
+  $allow_insecure = (bool) petitionssignatureform_variable_get('petitionssignatureform_allow_insecure');
+
+  try {
+    libraries_load(PETITIONSSIGNATUREFORM_SDK);
+    $connector = new PetitionsPhpSdkApiConnector($base, $key, $allow_insecure);
+    $response = $connector->getPetitions(1, 0, array('url' => $petition_url));
+    // Dig into the response to get the Petition ID.
+    if (!empty($response->results[0]->id)) {
+      // Return item 0, petition.
+      return $response->results[0];
+    }
+    else {
+      watchdog('petitionssignatureform', "Could not get a petition ID via the API. Response: !response", array(
+        '!response' => petitionssignatureform_format_for_watchdog($response),
+      ), WATCHDOG_ERROR);
+    }
+  }
+  catch (Exception $e) {
+    watchdog('petitionssignatureform', "Error retrieving petition: !exception", array(
+      '!exception' => petitionssignatureform_format_for_watchdog($e),
+    ), WATCHDOG_ERROR);
+  }
+}
+
+/**
+ * Logs a system event.
+ *
+ * This function logs to the Petitions distribution's event logging facility if
+ * available.
+ *
+ * @param string $name
+ *   The name of the event you want to log.
+ * @param string $type
+ *   (optional) The type of metric to log--one of the following values
+ *   corresponding to the
+ *   @link https://github.com/etsy/statsd/blob/master/docs/metric_types.md StatsD Metric Types @endlink
+ *   :
+ *   - count: The corresponding value is a number by which to increment (or
+ *     decrement, if negative) a simple counter.
+ *   - gauge: The corresponding value is a single datum, which remains constant
+ *     until explicitly changed.
+ *   - set: The corresponding value is a value to add to a set of unique values.
+ *   - time: The corresponding value is a duration in milliseconds.
+ * @param int|null $value
+ *   (optional) The numeric value you wish to log. Defaults to NULL.
+ *
+ * @see petitionslog_event()
+ */
+function petitionssignatureform_log_event($name, $type = 'count', $value = NULL) {
+  // If inside a Petitions site, use the Petitions logging facility.
+  if (function_exists('petitionslog_event')) {
+    petitionslog_event($name, $type, $value);
+  }
+}
+
+/**
+ * Formats data for logging via watchdog.
+ *
+ * This function collapses data structures to a single line for compatibility
+ * with syslog, which truncates anything more. If run inside a Petitions site,
+ * it delegates to the distribution's more sophisticated facilities.
+ *
+ * @param mixed $data
+ *   An arbitrary array or object to be formatted readably for logging.
+ *
+ * @return string
+ *   The data formatted to send to watchdog.
+ *
+ * @see watchdog()
+ * @see petitionslog_format_for_watchdog()
+ */
+function petitionssignatureform_format_for_watchdog($data) {
+  // If inside a Petitions site, there is already a (more sophisticated)
+  // function for this.
+  if (function_exists('petitionslog_format_for_watchdog')) {
+    return petitionslog_format_for_watchdog($data);
+  }
+
+  // Use (compressed) JSON to get it all on a single line.
+  return json_encode($data);
+}

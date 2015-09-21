@@ -1,0 +1,14 @@
+name = US Fed Gov Google Analytics
+description = GSA provided Federal Google Analytics code embed
+core = 7.x
+
+dependencies[] = usfedgov_google_analytics_libs
+
+configure = admin/config/system/usfedgov_google_analytics
+
+; Information added by Drupal.org packaging script on 2014-06-04
+version = "7.x-1.0-rc1"
+core = "7.x"
+project = "usfedgov_google_analytics"
+datestamp = "1401917628"
+

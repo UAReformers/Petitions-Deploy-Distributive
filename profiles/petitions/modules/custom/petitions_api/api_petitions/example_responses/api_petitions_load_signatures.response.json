@@ -1,0 +1,178 @@
+{
+  "metadata": {
+    "responseInfo": {
+      "status": 200,
+      "developerMessage": "OK",
+      "userMessage": "",
+      "errorCode": "",
+      "moreInfo": ""
+    },
+    "resultset": {
+      "count": 24533539,
+      "limit": 16,
+      "offset": 0
+    }
+  },
+  "results": [
+    {
+      "id": "4e7b218a4bd504c17a000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "K. S.",
+      "city": "",
+      "state": "",
+      "zip": "",
+      "created": 1316692362
+    },
+    {
+      "id": "4e7b2269709f03747a000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "A. J.",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20502",
+      "created": 1316692585
+    },
+    {
+      "id": "4e7b229f709f036f7a000002",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "C. B.",
+      "city": "Alexandria",
+      "state": "VA",
+      "zip": "22193",
+      "created": 1316692639
+    },
+    {
+      "id": "4e7b22b58d8c37d875000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "B. B.",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20502",
+      "created": 1316692661
+    },
+    {
+      "id": "4e7b23768d8c37d775000000",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": ". .",
+      "city": "",
+      "state": "",
+      "zip": "",
+      "created": 1316692854
+    },
+    {
+      "id": "4e7b23d011fb9c3e7a000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "E. M.",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20502",
+      "created": 1316692944
+    },
+    {
+      "id": "4e7b23efcf436a2274000002",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "A. J.",
+      "city": "Arlington",
+      "state": "MA",
+      "zip": "02476",
+      "created": 1316692975
+    },
+    {
+      "id": "4e7b23f8ec309e5f76000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "B. B.",
+      "city": "Augusta",
+      "state": "GA",
+      "zip": "30907",
+      "created": 1316692984
+    },
+    {
+      "id": "4e7b23fc4bd5043606000000",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "S. P.",
+      "city": "Montgomery Village",
+      "state": "MD",
+      "zip": "20886",
+      "created": 1316692988
+    },
+    {
+      "id": "4e7b2406cf436a2874000001",
+      "type": "signature",
+      "petitionId": "4e7b23c2ec309e5e76000001",
+      "name": "T. C.",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20010",
+      "created": 1316692998
+    },
+    {
+      "id": "4e7b241d709f036d7a000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "C. B.",
+      "city": "Woodbridge",
+      "state": "VA",
+      "zip": "22193",
+      "created": 1316693021
+    },
+    {
+      "id": "4e7b25fd11fb9c3c7a000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "A. T.",
+      "city": "Arlington",
+      "state": "MA",
+      "zip": "02476",
+      "created": 1316693501
+    },
+    {
+      "id": "4e7b268c4bd504c37a000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "K. S.",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20009",
+      "created": 1316693644
+    },
+    {
+      "id": "4e7b2730cf436a2574000001",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "E. L.",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20008",
+      "created": 1316693808
+    },
+    {
+      "id": "4e7b273a8d8c37dc75000000",
+      "type": "signature",
+      "petitionId": "4e7b2719b25636dd79000001",
+      "name": "T. C.",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20010",
+      "created": 1316693818
+    },
+    {
+      "id": "4e7b27ee709f03727a000000",
+      "type": "signature",
+      "petitionId": "4e7b21632ee8d04577000000",
+      "name": "E. L.",
+      "city": "Washington",
+      "state": "DC",
+      "zip": "20001",
+      "created": 1316693998
+    }
+  ]
+}
